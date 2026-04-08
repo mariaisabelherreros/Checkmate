@@ -17,6 +17,7 @@ export interface INotificationsService {
 
 	sendTestNotification: (notification: Partial<Notification>) => Promise<boolean>;
 	testAllNotifications: (notificationIds: string[]) => Promise<boolean>;
+	handleEscalations: (monitor: Monitor) => Promise<boolean>;
 }
 
 const SERVICE_NAME = "NotificationsService";
@@ -172,6 +173,86 @@ export class NotificationsService implements INotificationsService {
 			return false;
 		}
 		return true;
+	};
+
+	handleEscalations = async (monitor: Monitor): Promise<boolean> => {
+		console.log(`[ESCALATION] Checking monitor ${monitor.name}`, {
+			escalationDelay: monitor.escalationDelay,
+			escalationNotifications: monitor.escalationNotifications?.length,
+			hasLastCheck: !!monitor.recentChecks?.[monitor.recentChecks.length - 1],
+		});
+	
+		if (!monitor.escalationDelay || monitor.escalationDelay === 0 || !monitor.escalationNotifications || monitor.escalationNotifications.length === 0) {
+			console.log(`[ESCALATION] No escalation config for ${monitor.name}`);
+			return false;
+		}
+	
+		const lastCheck = monitor.recentChecks?.[monitor.recentChecks.length - 1];
+    if (!lastCheck || lastCheck.status === true) {
+        if (monitor.downSince || monitor.escalationSent) {
+            await this.monitorsRepository.updateById(monitor.id, monitor.teamId, { 
+                downSince: null,
+                escalationSent: false,
+            });
+        }
+        return false;
+    }
+	let downSinceDate = monitor.downSince ? new Date(monitor.downSince) : null;
+
+    if (!downSinceDate) {
+        console.log(`[ESCALATION] Setting downSince for ${monitor.name}`);
+        await this.monitorsRepository.updateById(monitor.id, monitor.teamId, { 
+            downSince: new Date(),
+        });
+        return false;
+    }
+
+    const downtime = Date.now() - downSinceDate.getTime();
+    const delayMs = monitor.escalationDelay * 60 * 1000;
+	
+		console.log(`[ESCALATION] Monitor ${monitor.name} downtime: ${downtime}ms, delay: ${delayMs}ms, escalationSent: ${monitor.escalationSent}`);
+	
+		if (downtime >= delayMs && !monitor.escalationSent) {
+			console.log(`[ESCALATION] Sending escalation for ${monitor.name}`);
+			
+			const escalationNotificationIds = monitor.escalationNotifications ?? [];
+			const notifications = await this.notificationsRepository.findNotificationsByIds(escalationNotificationIds);
+	
+			console.log(`[ESCALATION] Found ${notifications.length} notifications to send`);
+	
+			const notificationMessage: NotificationMessage = {
+				type: "escalation",
+				monitor,
+				severity: "critical",
+				content: {
+					title: `Escalation: ${monitor.name}`,
+					summary: `Monitor has been down for ${Math.floor(downtime / 60000)} minutes`,
+					timestamp: new Date(),
+				},
+				clientHost: "Unknown Host", 
+				metadata: {
+					teamId: monitor.teamId,
+					notificationReason: "Escalation triggered due to prolonged downtime",
+				}, 
+			};
+	
+			const tasks = notifications.map((notification) => 
+				this.send(notification, monitor, {} as MonitorStatusResponse, { shouldSendNotification: true } as MonitorActionDecision, notificationMessage)
+			);
+	
+			const outcomes = await Promise.all(tasks);
+			const succeeded = outcomes.filter(Boolean).length;
+	
+			console.log(`[ESCALATION] Escalation sent: ${succeeded}/${outcomes.length} succeeded`);
+	
+			if (succeeded > 0) {
+				await this.monitorsRepository.updateById(monitor.id, monitor.teamId, { escalationSent: true });
+			}
+	
+			return succeeded > 0;
+		}
+	
+		return false;
 	};
 
 	createNotification = async (notificationData: Partial<Notification>, userId: string, teamId: string): Promise<Notification> => {
