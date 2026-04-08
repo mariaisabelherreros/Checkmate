@@ -176,14 +176,7 @@ export class NotificationsService implements INotificationsService {
 	};
 
 	handleEscalations = async (monitor: Monitor): Promise<boolean> => {
-		console.log(`[ESCALATION] Checking monitor ${monitor.name}`, {
-			escalationDelay: monitor.escalationDelay,
-			escalationNotifications: monitor.escalationNotifications?.length,
-			hasLastCheck: !!monitor.recentChecks?.[monitor.recentChecks.length - 1],
-		});
-	
 		if (!monitor.escalationDelay || monitor.escalationDelay === 0 || !monitor.escalationNotifications || monitor.escalationNotifications.length === 0) {
-			console.log(`[ESCALATION] No escalation config for ${monitor.name}`);
 			return false;
 		}
 	
@@ -200,7 +193,6 @@ export class NotificationsService implements INotificationsService {
 	let downSinceDate = monitor.downSince ? new Date(monitor.downSince) : null;
 
     if (!downSinceDate) {
-        console.log(`[ESCALATION] Setting downSince for ${monitor.name}`);
         await this.monitorsRepository.updateById(monitor.id, monitor.teamId, { 
             downSince: new Date(),
         });
@@ -209,17 +201,12 @@ export class NotificationsService implements INotificationsService {
 
     const downtime = Date.now() - downSinceDate.getTime();
     const delayMs = monitor.escalationDelay * 60 * 1000;
-	
-		console.log(`[ESCALATION] Monitor ${monitor.name} downtime: ${downtime}ms, delay: ${delayMs}ms, escalationSent: ${monitor.escalationSent}`);
-	
+		
 		if (downtime >= delayMs && !monitor.escalationSent) {
-			console.log(`[ESCALATION] Sending escalation for ${monitor.name}`);
 			
 			const escalationNotificationIds = monitor.escalationNotifications ?? [];
 			const notifications = await this.notificationsRepository.findNotificationsByIds(escalationNotificationIds);
-	
-			console.log(`[ESCALATION] Found ${notifications.length} notifications to send`);
-	
+		
 			const notificationMessage: NotificationMessage = {
 				type: "escalation",
 				monitor,
@@ -242,9 +229,7 @@ export class NotificationsService implements INotificationsService {
 	
 			const outcomes = await Promise.all(tasks);
 			const succeeded = outcomes.filter(Boolean).length;
-	
-			console.log(`[ESCALATION] Escalation sent: ${succeeded}/${outcomes.length} succeeded`);
-	
+		
 			if (succeeded > 0) {
 				await this.monitorsRepository.updateById(monitor.id, monitor.teamId, { escalationSent: true });
 			}
